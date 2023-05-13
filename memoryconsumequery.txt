@@ -1,0 +1,123 @@
+SELECT mg.granted_memory_kb, mg.session_id, t.text, qp.query_plan 
+FROM sys.dm_exec_query_memory_grants AS mg
+CROSS APPLY sys.dm_exec_sql_text(mg.sql_handle) AS t
+CROSS APPLY sys.dm_exec_query_plan(mg.plan_handle) AS qp
+ORDER BY 1 DESC OPTION (MAXDOP 1)
+
+
+
+
+
+----------------------
+
+
+
+
+SELECT TOP 10 Object_name(qt.objectid) 
+              AS 'SP Name', 
+              Substring(qt.text, ( qs.statement_start_offset / 2 ) + 1, 
+              ( 
+              ( CASE qs.statement_end_offset 
+              WHEN -1 THEN Datalength(qt.text) 
+              ELSE qs.statement_end_offset 
+                                                                            END 
+                - 
+                qs.statement_start_offset ) / 2 ) + 1) 
+              AS statement_text, 
+              total_logical_reads, 
+              qs.execution_count 
+              AS 'Execution Count', 
+              total_logical_reads / qs.execution_count 
+              AS 'AvgLogicalReads', 
+              qs.execution_count / Datediff(minute, qs.creation_time, Getdate()) 
+              AS 
+              'Calls/minute', 
+              qs.total_worker_time / qs.execution_count 
+              AS 'AvgWorkerTime', 
+              qs.total_worker_time 
+              AS 'TotalWorkerTime', 
+              qs.total_elapsed_time / qs.execution_count 
+              AS 'AvgElapsedTime', 
+              qs.total_logical_writes, 
+              qs.max_logical_reads, 
+              qs.max_logical_writes, 
+              qs.total_physical_reads, 
+              qt.dbid, 
+              qp.query_plan 
+FROM   sys.dm_exec_query_stats AS qs 
+       CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS qt 
+       OUTER APPLY sys.dm_exec_query_plan(qs.plan_handle) qp 
+WHERE  qt.dbid = Db_id() -- Filter by current database 
+ORDER  BY total_logical_reads DESC 
+
+
+
+--------------------------------------------------------------------deadlock query----------------------------------------------
+
+
+SELECT  L.request_session_id AS SPID, 
+    DB_NAME(L.resource_database_id) AS DatabaseName,
+    O.Name AS LockedObjectName, 
+    P.object_id AS LockedObjectId, 
+    L.resource_type AS LockedResource, 
+    L.request_mode AS LockType,
+    ST.text AS SqlStatementText,        
+    ES.login_name AS LoginName,
+    ES.host_name AS HostName,
+    TST.is_user_transaction as IsUserTransaction,
+    AT.name as TransactionName,
+    CN.auth_scheme as AuthenticationMethod
+FROM    sys.dm_tran_locks L
+    JOIN sys.partitions P ON P.hobt_id = L.resource_associated_entity_id
+    JOIN sys.objects O ON O.object_id = P.object_id
+    JOIN sys.dm_exec_sessions ES ON ES.session_id = L.request_session_id
+    JOIN sys.dm_tran_session_transactions TST ON ES.session_id = TST.session_id
+    JOIN sys.dm_tran_active_transactions AT ON TST.transaction_id = AT.transaction_id
+    JOIN sys.dm_exec_connections CN ON CN.session_id = ES.session_id
+    CROSS APPLY sys.dm_exec_sql_text(CN.most_recent_sql_handle) AS ST
+WHERE   resource_database_id = db_id()
+ORDER BY L.request_session_id
+
+------------------------------------------------------------------
+
+
+
+declare @dbName varchar(50)
+select @dbName = 'PMSEDU'
+
+CREATE TABLE #sp_who2 (SPID INT,Status VARCHAR(255),
+      Login  VARCHAR(255),HostName  VARCHAR(255),
+      BlkBy  VARCHAR(255),DBName  VARCHAR(255),
+      Command VARCHAR(255),CPUTime INT,
+      DiskIO INT,LastBatch VARCHAR(255),
+      ProgramName VARCHAR(255),SPID2 INT,
+      REQUESTID INT)
+INSERT INTO #sp_who2 EXEC sp_who2
+SELECT      *
+FROM        #sp_who2
+-- Add any filtering of the results here :
+WHERE       BlkBy <> '  .'
+--DBName = @dbName and 
+-- Add any sorting of the results here :
+ORDER BY    DBName ASC
+ 
+DROP TABLE #sp_who2       
+---------------------------------------
+
+
+SELECT
+    session_id,
+    start_time, 
+    [status],
+    command,
+    blocking_session_id,
+    wait_type,
+    wait_time,
+    open_transaction_count,
+    transaction_id,
+    total_elapsed_time,
+    Definition = CAST(text AS VARCHAR(MAX))
+FROM
+    SYS.DM_EXEC_REQUESTS
+    CROSS APPLY sys.dm_exec_sql_text(sql_handle) 
+WHERE blocking_session_id != 0
